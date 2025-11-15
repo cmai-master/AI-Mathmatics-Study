@@ -1064,6 +1064,588 @@ X := f_X(PA_X, U_X)
 
 ---
 
+## 8. Evaluation Metrics
+
+### Why Metrics Matter
+
+**Problem**: Loss functions optimize training, but don't directly measure what we care about
+
+**Examples**:
+- Low cross-entropy ≠ good user experience
+- High accuracy with class imbalance ≠ useful model
+- Small MSE ≠ perceptually good images
+
+**Solution**: Use task-appropriate evaluation metrics
+
+---
+
+### 8.1 Classification Metrics
+
+#### Binary Classification
+
+**Confusion Matrix**:
+
+```
+                  Predicted
+              Positive  Negative
+Actual  Pos      TP        FN
+        Neg      FP        TN
+```
+
+Where:
+- **TP** (True Positive): Correctly predicted positive
+- **TN** (True Negative): Correctly predicted negative
+- **FP** (False Positive): Incorrectly predicted positive (Type I error)
+- **FN** (False Negative): Incorrectly predicted negative (Type II error)
+
+#### Basic Metrics
+
+**1. Accuracy**
+
+$$
+\text{Accuracy} = \frac{TP + TN}{TP + TN + FP + FN}
+$$
+
+- Simple, intuitive
+- **Problem**: Misleading with class imbalance
+  - Example: 99% negative class → predict all negative → 99% accuracy!
+
+**2. Precision** (Positive Predictive Value)
+
+$$
+\text{Precision} = \frac{TP}{TP + FP}
+$$
+
+- "Of all predicted positives, how many were actually positive?"
+- **High precision**: Few false alarms
+- **Use when**: False positives are costly (e.g., spam detection)
+
+**3. Recall** (Sensitivity, True Positive Rate)
+
+$$
+\text{Recall} = \frac{TP}{TP + FN}
+$$
+
+- "Of all actual positives, how many did we find?"
+- **High recall**: Don't miss positives
+- **Use when**: False negatives are costly (e.g., disease detection)
+
+**4. F1 Score**
+
+Harmonic mean of precision and recall:
+
+$$
+F_1 = 2 \cdot \frac{\text{Precision} \cdot \text{Recall}}{\text{Precision} + \text{Recall}} = \frac{2TP}{2TP + FP + FN}
+$$
+
+**Why harmonic mean?** Penalizes extreme imbalance
+
+- Regular mean: $\frac{0.9 + 0.1}{2} = 0.5$
+- Harmonic mean: $\frac{2 \cdot 0.9 \cdot 0.1}{0.9 + 0.1} = 0.18$
+
+**Generalization**: $F_\beta$ score
+$$
+F_\beta = (1 + \beta^2) \cdot \frac{\text{Precision} \cdot \text{Recall}}{\beta^2 \cdot \text{Precision} + \text{Recall}}
+$$
+
+- $\beta > 1$: Favor recall
+- $\beta < 1$: Favor precision
+
+**5. Specificity** (True Negative Rate)
+
+$$
+\text{Specificity} = \frac{TN}{TN + FP}
+$$
+
+- "Of all actual negatives, how many did we correctly identify?"
+
+#### ROC Curve and AUC
+
+**ROC (Receiver Operating Characteristic) Curve**:
+- Plot TPR (Recall) vs FPR at different thresholds
+- $\text{FPR} = \frac{FP}{FP + TN} = 1 - \text{Specificity}$
+
+**AUC (Area Under Curve)**:
+- Single number summary of ROC
+- Range: [0, 1]
+- 0.5: Random classifier
+- 1.0: Perfect classifier
+
+**Interpretation**: Probability that a random positive example is ranked higher than a random negative example
+
+**Mathematical formulation**:
+$$
+\text{AUC} = \int_0^1 \text{TPR}(t) \, d(\text{FPR}(t))
+$$
+
+#### Precision-Recall Curve
+
+Alternative to ROC, especially for **imbalanced datasets**:
+- Plot Precision vs Recall at different thresholds
+- **AP (Average Precision)**: Area under PR curve
+
+**When to use**:
+- **Balanced classes**: ROC-AUC
+- **Imbalanced classes**: Precision-Recall & AP
+
+#### Multi-Class Classification
+
+**1. Macro-Average**:
+$$
+\text{Macro-F1} = \frac{1}{C} \sum_{i=1}^C F1_i
+$$
+
+- Treat all classes equally
+- Good when all classes are important
+
+**2. Micro-Average**:
+$$
+\text{Micro-F1} = \frac{2 \sum_i TP_i}{2\sum_i TP_i + \sum_i FP_i + \sum_i FN_i}
+$$
+
+- Aggregate contributions, then compute
+- Favors larger classes
+
+**3. Weighted Average**:
+$$
+\text{Weighted-F1} = \sum_{i=1}^C \frac{n_i}{n} F1_i
+$$
+
+- Weight by class frequency
+
+**Example**:
+- Class A: 900 samples, F1=0.95
+- Class B: 100 samples, F1=0.50
+
+- Macro: $(0.95 + 0.50)/2 = 0.725$
+- Micro: $\approx 0.92$ (dominated by class A)
+- Weighted: $0.9 \times 0.95 + 0.1 \times 0.50 = 0.905$
+
+#### Log Loss (Cross-Entropy)
+
+For probabilistic predictions:
+
+$$
+\text{LogLoss} = -\frac{1}{N}\sum_{i=1}^N \left[y_i \log(\hat{p}_i) + (1-y_i)\log(1-\hat{p}_i)\right]
+$$
+
+- Penalizes confident wrong predictions heavily
+- **Lower is better**
+- Measures calibration, not just decisions
+
+---
+
+### 8.2 Regression Metrics
+
+#### 1. Mean Absolute Error (MAE)
+
+$$
+\text{MAE} = \frac{1}{n}\sum_{i=1}^n |y_i - \hat{y}_i|
+$$
+
+- **Robust to outliers**
+- Interpretable (same units as target)
+- All errors weighted equally
+
+#### 2. Mean Squared Error (MSE)
+
+$$
+\text{MSE} = \frac{1}{n}\sum_{i=1}^n (y_i - \hat{y}_i)^2
+$$
+
+- **Penalizes large errors** more heavily
+- Differentiable everywhere
+- Not robust to outliers
+
+#### 3. Root Mean Squared Error (RMSE)
+
+$$
+\text{RMSE} = \sqrt{\frac{1}{n}\sum_{i=1}^n (y_i - \hat{y}_i)^2}
+$$
+
+- Same units as target
+- Balances MSE properties with interpretability
+
+#### 4. R² (Coefficient of Determination)
+
+$$
+R^2 = 1 - \frac{\sum_i (y_i - \hat{y}_i)^2}{\sum_i (y_i - \bar{y})^2} = 1 - \frac{\text{SS}_{\text{res}}}{\text{SS}_{\text{tot}}}
+$$
+
+Where $\bar{y} = \frac{1}{n}\sum_i y_i$ is the mean.
+
+**Interpretation**:
+- $R^2 = 1$: Perfect predictions
+- $R^2 = 0$: Same as predicting mean
+- $R^2 < 0$: Worse than predicting mean
+
+**Problem**: Can be misleading
+- Always increases with more features (for training data)
+- Use adjusted $R^2$ or validation set
+
+#### 5. Mean Absolute Percentage Error (MAPE)
+
+$$
+\text{MAPE} = \frac{100\%}{n}\sum_{i=1}^n \left|\frac{y_i - \hat{y}_i}{y_i}\right|
+$$
+
+- Scale-independent
+- Interpretable as percentage
+- **Problem**: Undefined when $y_i = 0$, asymmetric
+
+---
+
+### 8.3 Ranking and Recommendation Metrics
+
+#### Precision@K
+
+$$
+\text{P@K} = \frac{\text{# relevant items in top K}}{K}
+$$
+
+Example: Search results, show top 10
+- If 7 are relevant → P@10 = 0.7
+
+#### Recall@K
+
+$$
+\text{R@K} = \frac{\text{# relevant items in top K}}{\text{total # relevant items}}
+$$
+
+#### Mean Average Precision (MAP)
+
+$$
+\text{MAP} = \frac{1}{|Q|}\sum_{q=1}^{|Q|} \text{AP}(q)
+$$
+
+Where for query $q$:
+$$
+\text{AP}(q) = \frac{1}{|R_q|}\sum_{k=1}^n P(k) \cdot \text{rel}(k)
+$$
+
+- $R_q$: Relevant documents for query $q$
+- $P(k)$: Precision at position $k$
+- $\text{rel}(k)$: 1 if item at $k$ is relevant, 0 otherwise
+
+**Captures**: Precision across all recall levels
+
+#### Normalized Discounted Cumulative Gain (NDCG)
+
+For graded relevance (not just binary):
+
+**DCG@K**:
+$$
+\text{DCG@K} = \sum_{i=1}^K \frac{2^{\text{rel}_i} - 1}{\log_2(i+1)}
+$$
+
+**NDCG@K**:
+$$
+\text{NDCG@K} = \frac{\text{DCG@K}}{\text{IDCG@K}}
+$$
+
+Where IDCG = DCG of ideal ranking
+
+- Range: [0, 1]
+- 1 = perfect ranking
+- Emphasizes top results (logarithmic discount)
+
+#### Mean Reciprocal Rank (MRR)
+
+$$
+\text{MRR} = \frac{1}{|Q|}\sum_{i=1}^{|Q|} \frac{1}{\text{rank}_i}
+$$
+
+Where $\text{rank}_i$ is position of first relevant result for query $i$
+
+**Use case**: Question answering, single correct answer
+
+---
+
+### 8.4 Generative Model Metrics
+
+#### Perceptual Quality (Images)
+
+**1. Inception Score (IS)**
+
+$$
+\text{IS} = \exp\left(\mathbb{E}_{x \sim p_g} D_{KL}(p(y|x) || p(y))\right)
+$$
+
+- Higher is better
+- Measures diversity and quality
+- **Problem**: Doesn't compare to real data distribution
+
+**2. Fréchet Inception Distance (FID)**
+
+$$
+\text{FID} = ||\mu_r - \mu_g||^2 + \text{Tr}(\Sigma_r + \Sigma_g - 2(\Sigma_r \Sigma_g)^{1/2})
+$$
+
+Where:
+- $(\mu_r, \Sigma_r)$: Mean and covariance of real images (in Inception feature space)
+- $(\mu_g, \Sigma_g)$: Mean and covariance of generated images
+
+- **Lower is better**
+- Captures both quality and diversity
+- Standard metric for GANs, diffusion models
+
+#### Text Generation
+
+**1. Perplexity**
+
+$$
+\text{PPL} = \exp\left(-\frac{1}{N}\sum_{i=1}^N \log p(w_i | w_{<i})\right)
+$$
+
+- Exponential of cross-entropy
+- **Lower is better**
+- Measures how "surprised" model is by test data
+
+**2. BLEU (Bilingual Evaluation Understudy)**
+
+$$
+\text{BLEU} = BP \cdot \exp\left(\sum_{n=1}^N w_n \log p_n\right)
+$$
+
+Where:
+- $p_n$: Precision of n-grams
+- $BP$: Brevity penalty (penalize short outputs)
+
+- Range: [0, 1]
+- Measures overlap with reference translations
+- **Problem**: Poor correlation with human judgment for single sentences
+
+**3. ROUGE (Recall-Oriented Understudy for Gisting Evaluation)**
+
+Focus on **recall** instead of precision:
+- ROUGE-N: N-gram recall
+- ROUGE-L: Longest common subsequence
+- Used for summarization
+
+**4. BERTScore**
+
+$$
+\text{BERTScore} = \frac{1}{|r|}\sum_{r_i \in r} \max_{c_j \in c} \text{cos}(r_i, c_j)
+$$
+
+- Semantic similarity using BERT embeddings
+- Better than n-gram metrics for paraphrases
+
+---
+
+### 8.5 Clustering Metrics
+
+#### Internal Metrics (No Ground Truth)
+
+**1. Silhouette Score**
+
+For each point $i$:
+$$
+s(i) = \frac{b(i) - a(i)}{\max(a(i), b(i))}
+$$
+
+Where:
+- $a(i)$: Mean distance to other points in same cluster
+- $b(i)$: Mean distance to points in nearest other cluster
+
+**Average silhouette**: $\frac{1}{n}\sum_i s(i)$
+- Range: [-1, 1]
+- Higher is better
+
+**2. Davies-Bouldin Index**
+
+$$
+\text{DB} = \frac{1}{k}\sum_{i=1}^k \max_{j \neq i} \frac{\sigma_i + \sigma_j}{d(c_i, c_j)}
+$$
+
+- **Lower is better**
+- Ratio of within-cluster to between-cluster distances
+
+#### External Metrics (With Ground Truth)
+
+**1. Adjusted Rand Index (ARI)**
+
+$$
+\text{ARI} = \frac{\text{RI} - E[\text{RI}]}{\max(\text{RI}) - E[\text{RI}]}
+$$
+
+- Range: [-1, 1]
+- 1 = perfect match
+- 0 = random clustering
+- Adjusted for chance
+
+**2. Normalized Mutual Information (NMI)**
+
+$$
+\text{NMI} = \frac{I(U; V)}{\sqrt{H(U)H(V)}}
+$$
+
+Where $U$ and $V$ are cluster assignments and ground truth
+
+- Range: [0, 1]
+- 1 = perfect clustering
+
+---
+
+### 8.6 Choosing the Right Metric
+
+#### Decision Framework
+
+```
+Is this classification?
+│
+├─ Binary
+│  ├─ Balanced classes? → Accuracy, F1
+│  ├─ Imbalanced? → Precision-Recall, AP
+│  ├─ Probabilistic? → Log Loss, ROC-AUC
+│  └─ Cost-sensitive? → Custom threshold + F_β
+│
+├─ Multi-class
+│  ├─ All classes equal? → Macro-F1
+│  ├─ Size matters? → Weighted-F1
+│  └─ Aggregate performance? → Micro-F1
+│
+Is this regression?
+│  ├─ Outliers present? → MAE
+│  ├─ Penalize large errors? → MSE, RMSE
+│  ├─ Relative errors? → MAPE
+│  └─ Variance explained? → R²
+│
+Is this ranking?
+│  ├─ Top-K matters most? → P@K, R@K
+│  ├─ Overall ranking? → MAP, NDCG
+│  └─ First result critical? → MRR
+│
+Is this generation?
+│  ├─ Images? → FID, IS
+│  ├─ Text (reference)? → BLEU, ROUGE
+│  ├─ Text (no reference)? → Perplexity
+│  └─ Semantic quality? → BERTScore
+│
+Is this clustering?
+│  ├─ No labels? → Silhouette, Davies-Bouldin
+│  └─ With labels? → ARI, NMI
+```
+
+#### Best Practices
+
+1. **Use multiple metrics**: No single metric is perfect
+   - Example: Accuracy + Precision + Recall + ROC-AUC
+
+2. **Match metric to business goal**:
+   - Medical diagnosis: High recall (catch all diseases)
+   - Spam filter: High precision (don't block legitimate email)
+
+3. **Be aware of limitations**:
+   - Accuracy fails with imbalance
+   - BLEU doesn't capture fluency
+   - FID requires many samples
+
+4. **Report confidence intervals**:
+   - Bootstrap resampling
+   - Cross-validation
+   - Statistical significance tests
+
+5. **Consider computational cost**:
+   - FID: Expensive (requires Inception network)
+   - Accuracy: Cheap
+   - Trade-off for development vs. final evaluation
+
+---
+
+### 8.7 Implementation Examples
+
+#### Classification Metrics
+
+```python
+import numpy as np
+from sklearn.metrics import (accuracy_score, precision_score, recall_score,
+                             f1_score, roc_auc_score, confusion_matrix)
+
+# Binary classification
+y_true = np.array([1, 0, 1, 1, 0, 1, 0, 0])
+y_pred = np.array([1, 0, 1, 0, 0, 1, 1, 0])
+y_prob = np.array([0.9, 0.1, 0.8, 0.6, 0.2, 0.95, 0.7, 0.3])
+
+print(f"Accuracy:  {accuracy_score(y_true, y_pred):.3f}")
+print(f"Precision: {precision_score(y_true, y_pred):.3f}")
+print(f"Recall:    {recall_score(y_true, y_pred):.3f}")
+print(f"F1 Score:  {f1_score(y_true, y_pred):.3f}")
+print(f"ROC-AUC:   {roc_auc_score(y_true, y_prob):.3f}")
+
+print("\nConfusion Matrix:")
+print(confusion_matrix(y_true, y_pred))
+```
+
+#### Regression Metrics
+
+```python
+from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
+
+y_true = np.array([3.0, 2.5, 4.0, 7.0])
+y_pred = np.array([2.8, 2.6, 3.8, 6.5])
+
+print(f"MAE:  {mean_absolute_error(y_true, y_pred):.3f}")
+print(f"MSE:  {mean_squared_error(y_true, y_pred):.3f}")
+print(f"RMSE: {np.sqrt(mean_squared_error(y_true, y_pred)):.3f}")
+print(f"R²:   {r2_score(y_true, y_pred):.3f}")
+```
+
+#### Custom Metrics
+
+```python
+def fbeta_score(precision, recall, beta=1.0):
+    """Compute F-beta score."""
+    return (1 + beta**2) * (precision * recall) / (beta**2 * precision + recall)
+
+def mean_reciprocal_rank(ranks):
+    """Compute MRR from list of ranks of first relevant item."""
+    return np.mean(1.0 / np.array(ranks))
+
+# Example
+precision = 0.8
+recall = 0.6
+
+print(f"F1 (β=1):   {fbeta_score(precision, recall, beta=1.0):.3f}")
+print(f"F2 (β=2):   {fbeta_score(precision, recall, beta=2.0):.3f}")  # Favor recall
+print(f"F0.5 (β=0.5): {fbeta_score(precision, recall, beta=0.5):.3f}")  # Favor precision
+
+# MRR example: first relevant at positions [1, 3, 2, 1]
+ranks = [1, 3, 2, 1]
+print(f"\nMRR: {mean_reciprocal_rank(ranks):.3f}")
+```
+
+---
+
+### 8.8 Common Pitfalls
+
+1. **Optimizing the wrong metric**
+   - Training loss ≠ Evaluation metric
+   - Solution: Use validation set with task metric
+
+2. **Data leakage in metrics**
+   - Computing metrics on training data
+   - Including validation data in preprocessing
+   - Solution: Strict train/val/test split
+
+3. **Ignoring class imbalance**
+   - High accuracy on imbalanced data
+   - Solution: Use precision, recall, F1, or sampling
+
+4. **Threshold selection**
+   - Default 0.5 may not be optimal
+   - Solution: Tune threshold on validation set
+
+5. **Multiple comparisons**
+   - Testing many models increases false discovery
+   - Solution: Bonferroni correction, hold-out test set
+
+6. **Cherry-picking metrics**
+   - Reporting only favorable metrics
+   - Solution: Pre-register evaluation protocol
+
+---
+
 ## Practice Problems
 
 ### Linear Algebra

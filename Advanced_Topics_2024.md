@@ -871,4 +871,694 @@ Common w: 7-15 for images
 
 ---
 
-**Next Section**: [Diffusion Models](#part-ii-diffusion-models) (Coming in next update)
+# PART III: Model Compression and Efficiency
+
+## 11. Introduction to Model Compression
+
+### Motivation
+
+Modern deep learning models are becoming increasingly large:
+- **GPT-3**: 175B parameters (~700GB in FP32)
+- **PaLM**: 540B parameters
+- **Stable Diffusion**: 890M parameters (~3.4GB)
+
+**Problems**:
+1. **Memory**: Cannot fit on single GPU
+2. **Latency**: Slow inference for real-time applications
+3. **Energy**: High power consumption
+4. **Cost**: Expensive cloud deployment
+
+**Goal**: Reduce model size and computational cost while maintaining accuracy
+
+### Compression Techniques Overview
+
+| Technique | Compression Ratio | Accuracy Impact | Inference Speedup |
+|-----------|------------------|----------------|-------------------|
+| **Pruning** | 2-10× | Low (1-2%) | 2-3× |
+| **Quantization** | 4× (INT8) | Very Low (<1%) | 2-4× |
+| **Knowledge Distillation** | Variable | Low-Medium | Variable |
+| **Low-Rank Factorization** | 2-5× | Low | 1.5-2× |
+| **Neural Architecture Search** | Variable | Can improve | Variable |
+
+---
+
+## 12. Pruning
+
+### 12.1 Magnitude-Based Pruning
+
+**Idea**: Remove weights with small magnitudes
+
+**Unstructured Pruning**: Remove individual weights
+$$
+W_{\text{pruned}}[i,j] = \begin{cases}
+W[i,j] & \text{if } |W[i,j]| > \tau \\
+0 & \text{otherwise}
+\end{cases}
+$$
+
+**Choosing threshold** $\tau$:
+- **Global**: Threshold across all layers
+- **Layer-wise**: Different threshold per layer
+- **Top-k%**: Keep only top k% largest weights
+
+**Structured Pruning**: Remove entire neurons/channels/filters
+
+$$
+\text{Keep channel } c \text{ if } ||W_c|| > \tau
+$$
+
+Where $||W_c||$ is the L2 norm of all weights in channel $c$.
+
+### 12.2 Iterative Pruning (Lottery Ticket Hypothesis)
+
+**Algorithm**:
+```
+1. Train network to convergence
+2. Prune p% smallest magnitude weights
+3. Reset remaining weights to initial values
+4. Retrain
+5. Repeat steps 2-4
+```
+
+**Lottery Ticket Hypothesis**: A randomly initialized network contains a subnetwork ("winning ticket") that can match the original network's performance when trained in isolation.
+
+### 12.3 Practical Implementation
+
+```python
+def magnitude_pruning(weight, sparsity=0.5):
+    """
+    Prune weights by magnitude.
+
+    Args:
+        weight: Weight tensor
+        sparsity: Fraction of weights to prune (0.5 = 50% pruned)
+    """
+    # Compute threshold
+    threshold = np.percentile(np.abs(weight), sparsity * 100)
+
+    # Create mask
+    mask = np.abs(weight) > threshold
+
+    # Apply mask
+    pruned_weight = weight * mask
+
+    return pruned_weight, mask
+
+# Example: Prune 90% of weights
+W = np.random.randn(512, 512)
+W_pruned, mask = magnitude_pruning(W, sparsity=0.9)
+
+print(f"Original non-zero: {np.count_nonzero(W)}")
+print(f"Pruned non-zero: {np.count_nonzero(W_pruned)}")
+print(f"Sparsity: {1 - np.count_nonzero(W_pruned) / W.size:.1%}")
+```
+
+### 12.4 Structured Pruning: Channel Pruning
+
+```python
+def channel_pruning(weight, sparsity=0.3):
+    """
+    Prune entire channels based on L2 norm.
+
+    Args:
+        weight: Conv weight tensor (out_channels, in_channels, H, W)
+        sparsity: Fraction of channels to prune
+    """
+    # Compute L2 norm per output channel
+    channel_norms = np.linalg.norm(weight.reshape(weight.shape[0], -1), axis=1)
+
+    # Threshold
+    threshold = np.percentile(channel_norms, sparsity * 100)
+
+    # Mask: keep channels with norm > threshold
+    mask = channel_norms > threshold
+
+    # Apply mask
+    pruned_weight = weight[mask, :, :, :]
+
+    return pruned_weight, mask
+```
+
+---
+
+## 13. Quantization
+
+### 13.1 Basics of Quantization
+
+**Goal**: Represent weights/activations with fewer bits
+
+**Standard representations**:
+- **FP32** (32-bit float): Standard training
+- **FP16** (16-bit float): Mixed precision training
+- **INT8** (8-bit integer): Common for inference
+- **INT4** / **Binary**: Extreme compression
+
+### 13.2 Uniform Quantization
+
+Map floating point values to integers:
+
+$$
+q = \text{round}\left(\frac{x - z}{s}\right)
+$$
+
+$$
+x \approx s \cdot q + z
+$$
+
+Where:
+- $x$: Original float value
+- $q$: Quantized integer value
+- $s$: **Scale** (step size)
+- $z$: **Zero-point** (offset)
+
+**Symmetric quantization** ($z = 0$):
+$$
+s = \frac{\max(|x_{\min}|, |x_{\max}|)}{2^{b-1} - 1}
+$$
+
+**Asymmetric quantization**:
+$$
+s = \frac{x_{\max} - x_{\min}}{2^b - 1}, \quad z = -\text{round}\left(\frac{x_{\min}}{s}\right)
+$$
+
+Where $b$ is the number of bits.
+
+### 13.3 Quantization-Aware Training (QAT)
+
+**Problem**: Post-training quantization can lose accuracy
+
+**Solution**: Simulate quantization during training
+
+**Straight-Through Estimator (STE)**:
+- **Forward**: Use quantized values
+- **Backward**: Pretend quantization is identity function
+
+$$
+\frac{\partial \text{round}(x)}{\partial x} \approx 1
+$$
+
+```python
+def quantize_aware_forward(x, scale, zero_point, num_bits=8):
+    """
+    Quantization-aware forward pass.
+    """
+    # Quantize
+    q_min = 0
+    q_max = 2**num_bits - 1
+
+    q = np.round(x / scale + zero_point)
+    q = np.clip(q, q_min, q_max)
+
+    # Dequantize (for forward pass)
+    x_quant = (q - zero_point) * scale
+
+    return x_quant
+
+# In backward pass: gradient flows through as if no quantization
+```
+
+### 13.4 Per-Channel vs Per-Tensor Quantization
+
+**Per-Tensor**: Single scale for entire tensor
+- Simple, fast
+- Less accurate
+
+**Per-Channel**: Different scale per output channel
+- More accurate
+- Slightly more complex
+
+$$
+q_{i,j} = \text{round}\left(\frac{W_{i,j}}{s_i}\right)
+$$
+
+Where $s_i$ is the scale for output channel $i$.
+
+### 13.5 Practical INT8 Quantization
+
+```python
+def compute_quantization_params(x, num_bits=8):
+    """
+    Compute scale and zero-point for quantization.
+    """
+    q_min = 0
+    q_max = 2**num_bits - 1
+
+    x_min = x.min()
+    x_max = x.max()
+
+    # Asymmetric quantization
+    scale = (x_max - x_min) / (q_max - q_min)
+    zero_point = q_min - x_min / scale
+    zero_point = np.round(zero_point).astype(np.int32)
+    zero_point = np.clip(zero_point, q_min, q_max)
+
+    return scale, zero_point
+
+def quantize(x, scale, zero_point, num_bits=8):
+    """Quantize float tensor to int."""
+    q_min = 0
+    q_max = 2**num_bits - 1
+
+    q = np.round(x / scale + zero_point)
+    q = np.clip(q, q_min, q_max).astype(np.uint8)
+
+    return q
+
+def dequantize(q, scale, zero_point):
+    """Dequantize int tensor to float."""
+    return (q.astype(np.float32) - zero_point) * scale
+
+# Example
+W = np.random.randn(512, 512) * 0.1
+scale, zero_point = compute_quantization_params(W, num_bits=8)
+W_quant = quantize(W, scale, zero_point)
+W_dequant = dequantize(W_quant, scale, zero_point)
+
+error = np.abs(W - W_dequant).mean()
+print(f"Quantization error: {error:.6f}")
+print(f"Compression: {W.nbytes / W_quant.nbytes:.1f}x")
+```
+
+---
+
+## 14. Knowledge Distillation
+
+### 14.1 Basic Knowledge Distillation
+
+**Idea**: Train small "student" model to mimic large "teacher" model
+
+**Setup**:
+- **Teacher**: Large, accurate model (pre-trained)
+- **Student**: Smaller model (to be trained)
+
+**Loss Function**:
+
+$$
+\mathcal{L} = \alpha \mathcal{L}_{\text{CE}}(y, \hat{y}_s) + (1-\alpha) \mathcal{L}_{\text{KD}}(\hat{y}_t, \hat{y}_s)
+$$
+
+Where:
+- $y$: True labels
+- $\hat{y}_s$: Student predictions
+- $\hat{y}_t$: Teacher predictions
+- $\alpha$: Balance parameter (e.g., 0.5)
+
+**Distillation Loss** (Hinton et al., 2015):
+
+$$
+\mathcal{L}_{\text{KD}} = \text{KL}\left(\text{softmax}\left(\frac{z_t}{T}\right) || \text{softmax}\left(\frac{z_s}{T}\right)\right)
+$$
+
+Where:
+- $z_t, z_s$: Logits (before softmax)
+- $T$: **Temperature** (typically 3-20)
+
+**Why temperature?** Softens probability distribution, revealing more information about similarities between classes.
+
+### 14.2 Temperature Scaling
+
+**Hard targets** (T=1): $[0.98, 0.01, 0.01]$
+- One class dominates
+- Little information about relationships
+
+**Soft targets** (T=5): $[0.60, 0.25, 0.15]$
+- Reveals class similarities
+- Richer training signal
+
+$$
+p_i = \frac{\exp(z_i / T)}{\sum_j \exp(z_j / T)}
+$$
+
+### 14.3 Feature Distillation
+
+Transfer **intermediate representations**, not just outputs:
+
+$$
+\mathcal{L}_{\text{feat}} = ||h_t - W \cdot h_s||^2
+$$
+
+Where:
+- $h_t$: Teacher's intermediate features
+- $h_s$: Student's intermediate features
+- $W$: Projection matrix (if dimensions differ)
+
+### 14.4 Self-Distillation
+
+**Idea**: Use model's own predictions as soft targets
+
+**Benefits**:
+- Smooths training
+- Acts as regularization
+- Can improve performance even without compression
+
+### 14.5 Implementation
+
+```python
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+
+def distillation_loss(student_logits, teacher_logits, labels, temperature=3.0, alpha=0.5):
+    """
+    Knowledge distillation loss.
+
+    Args:
+        student_logits: Student model logits
+        teacher_logits: Teacher model logits (detached)
+        labels: Ground truth labels
+        temperature: Softmax temperature
+        alpha: Balance between CE and KD loss
+    """
+    # Hard target loss (standard cross-entropy)
+    hard_loss = F.cross_entropy(student_logits, labels)
+
+    # Soft target loss (KL divergence with temperature scaling)
+    soft_student = F.log_softmax(student_logits / temperature, dim=1)
+    soft_teacher = F.softmax(teacher_logits / temperature, dim=1)
+
+    soft_loss = F.kl_div(soft_student, soft_teacher, reduction='batchmean')
+    soft_loss = soft_loss * (temperature ** 2)  # Scale by T^2
+
+    # Combined loss
+    total_loss = alpha * hard_loss + (1 - alpha) * soft_loss
+
+    return total_loss
+
+# Example usage
+teacher = TeacherModel()  # Large model
+student = StudentModel()  # Small model
+
+# Training loop
+for inputs, labels in dataloader:
+    # Teacher predictions (no gradient)
+    with torch.no_grad():
+        teacher_logits = teacher(inputs)
+
+    # Student predictions
+    student_logits = student(inputs)
+
+    # Distillation loss
+    loss = distillation_loss(student_logits, teacher_logits, labels,
+                             temperature=5.0, alpha=0.3)
+
+    # Backward and update
+    optimizer.zero_grad()
+    loss.backward()
+    optimizer.step()
+```
+
+---
+
+## 15. Low-Rank Factorization
+
+### 15.1 Matrix Factorization
+
+**Idea**: Approximate weight matrix $W \in \mathbb{R}^{m \times n}$ with low-rank decomposition
+
+**SVD Decomposition**:
+$$
+W \approx U_k \Sigma_k V_k^T
+$$
+
+Where $k \ll \min(m, n)$ is the rank.
+
+**Compression**:
+- Original: $m \times n$ parameters
+- Factorized: $k(m + n)$ parameters
+- Ratio: $\frac{mn}{k(m+n)}$
+
+**Example**: $W \in \mathbb{R}^{512 \times 512}$, $k=64$
+- Original: 262,144 parameters
+- Factorized: 65,536 parameters
+- Compression: 4×
+
+### 15.2 Tucker Decomposition for CNNs
+
+**Convolutional layers**: $W \in \mathbb{R}^{C_{\text{out}} \times C_{\text{in}} \times K \times K}$
+
+**Tucker decomposition**:
+$$
+W \approx G \times_1 U^{(1)} \times_2 U^{(2)} \times_3 U^{(3)} \times_4 U^{(4)}
+$$
+
+Approximate as sequence of smaller convolutions.
+
+### 15.3 LoRA (Low-Rank Adaptation)
+
+**Recent approach for fine-tuning** (Hu et al., 2021)
+
+Instead of updating all weights, add low-rank updates:
+
+$$
+W' = W + BA
+$$
+
+Where:
+- $W \in \mathbb{R}^{d \times k}$: Original (frozen)
+- $B \in \mathbb{R}^{d \times r}$, $A \in \mathbb{R}^{r \times k}$: Trainable low-rank matrices
+- $r \ll \min(d, k)$: Rank (e.g., 8)
+
+**Benefits**:
+- Only train $r(d+k)$ parameters instead of $dk$
+- Can switch between tasks by swapping $B, A$
+- No inference overhead (merge $BA$ into $W$)
+
+**Used in**: Stable Diffusion fine-tuning, LLM adaptation
+
+```python
+class LoRALayer(nn.Module):
+    """
+    Low-Rank Adaptation layer.
+    """
+    def __init__(self, in_features, out_features, rank=8):
+        super().__init__()
+
+        # Frozen original weight
+        self.weight = nn.Parameter(torch.randn(out_features, in_features))
+        self.weight.requires_grad = False
+
+        # Low-rank factors (trainable)
+        self.lora_A = nn.Parameter(torch.randn(rank, in_features))
+        self.lora_B = nn.Parameter(torch.zeros(out_features, rank))
+
+        self.rank = rank
+
+    def forward(self, x):
+        # Original transformation
+        result = F.linear(x, self.weight)
+
+        # Add low-rank update
+        result += F.linear(F.linear(x, self.lora_A), self.lora_B)
+
+        return result
+```
+
+---
+
+## 16. Practical Comparison
+
+### 16.1 Compression Techniques Comparison
+
+| Technique | Pros | Cons | Best For |
+|-----------|------|------|----------|
+| **Pruning** | Simple, effective | Irregular sparsity hard to accelerate | Memory-constrained deployment |
+| **Quantization** | Large speedup, HW support | Accuracy drop possible | Mobile, edge devices |
+| **Distillation** | Flexible, can improve | Requires teacher training | Small models from scratch |
+| **Low-Rank** | Mathematically principled | Limited compression | Large matrix multiplications |
+
+### 16.2 Combining Techniques
+
+**Common pipeline**:
+1. **Distillation**: Train smaller architecture
+2. **Quantization-Aware Training**: Add quantization
+3. **Pruning**: Remove redundant weights
+4. **Fine-tuning**: Recover accuracy
+
+**Example**: MobileNetV2 → DistilBERT approach
+- Architectural efficiency
+- Knowledge transfer
+- Quantization
+
+### 16.3 Hardware Considerations
+
+**GPU**:
+- INT8 support: 2-4× speedup (Tensor Cores)
+- Sparsity support: 2× speedup (Ampere+)
+
+**CPU**:
+- INT8: Intel VNNI, ARM dot product instructions
+- Significant speedup for inference
+
+**Mobile/Edge**:
+- INT8 essential
+- Model size critical (limited memory)
+
+---
+
+## 17. Tools and Frameworks
+
+### PyTorch
+
+```python
+# Quantization
+import torch.quantization as quant
+
+# Post-training static quantization
+model_fp32 = MyModel()
+model_fp32.eval()
+model_fp32.qconfig = quant.get_default_qconfig('fbgemm')
+model_prepared = quant.prepare(model_fp32)
+# Calibrate with data
+model_int8 = quant.convert(model_prepared)
+
+# Quantization-aware training
+model_fp32.qconfig = quant.get_default_qat_qconfig('fbgemm')
+model_prepared = quant.prepare_qat(model_fp32)
+# Train
+model_int8 = quant.convert(model_prepared)
+```
+
+### TensorFlow Lite
+
+```python
+# TensorFlow Lite quantization
+converter = tf.lite.TFLiteConverter.from_keras_model(model)
+converter.optimizations = [tf.lite.Optimize.DEFAULT]
+converter.target_spec.supported_types = [tf.float16]  # or tf.int8
+
+tflite_model = converter.convert()
+```
+
+### ONNX Runtime
+
+- Cross-framework optimization
+- Quantization, graph optimization
+- Hardware-specific acceleration
+
+---
+
+## 18. Case Studies
+
+### 18.1 MobileNet
+
+**Architecture optimizations**:
+- Depthwise separable convolutions
+- Inverted residuals
+- Width/resolution multipliers
+
+**Compression techniques**:
+- Quantization (8-bit)
+- Pruning
+
+**Results**: 75% accuracy on ImageNet with <5M parameters
+
+### 18.2 DistilBERT
+
+**Approach**: Knowledge distillation from BERT
+
+**Techniques**:
+- 6 layers instead of 12
+- Distillation on masked LM task
+- Triple loss (MLM + distillation + cosine embedding)
+
+**Results**:
+- 40% smaller
+- 60% faster
+- 97% of BERT's performance
+
+### 18.3 Stable Diffusion + LoRA
+
+**Fine-tuning approach**:
+- Freeze UNet weights
+- Add LoRA layers (rank 4-16)
+- Train on custom dataset
+
+**Benefits**:
+- <10MB per fine-tuned model
+- Fast training (< 1 hour on single GPU)
+- No catastrophic forgetting
+
+---
+
+## 19. Best Practices
+
+### When to Use Each Technique
+
+1. **Pruning**:
+   - When model is over-parameterized
+   - Memory is constrained
+   - Can retrain/fine-tune
+
+2. **Quantization**:
+   - Production deployment
+   - Real-time inference needed
+   - Target hardware supports INT8
+
+3. **Knowledge Distillation**:
+   - Training smaller models from scratch
+   - Have access to unlabeled data
+   - Can train teacher model
+
+4. **Low-Rank Factorization**:
+   - Large linear layers
+   - Fine-tuning large models
+   - Need parameter efficiency
+
+### Recommended Pipeline
+
+**For Research**:
+```
+Original Model → Pruning → Fine-tuning → Evaluation
+```
+
+**For Production**:
+```
+Architecture Search → Distillation → QAT → Pruning → Deployment
+```
+
+### Common Pitfalls
+
+1. **Quantizing too early**: Train in FP32, quantize at end
+2. **Aggressive pruning**: Start with 30-50%, increase gradually
+3. **Ignoring hardware**: Quantization speedup depends on hardware support
+4. **Not fine-tuning**: Always fine-tune after compression
+
+---
+
+## 20. Future Directions
+
+### Emerging Techniques
+
+1. **Neural Architecture Search (NAS)**: Automated compression-aware design
+2. **Mixed-Precision**: Automatic bit-width selection per layer
+3. **Sparse Training**: Train sparse from initialization (no pruning phase)
+4. **Quantization at Scale**: LLM.int8(), GPTQ for billion-parameter models
+
+### Research Questions
+
+- Theoretical understanding of why compression works
+- Compression for multimodal models
+- Hardware-software co-design
+- Compression-aware training from scratch
+
+---
+
+## References (Part III)
+
+14. **Han, S., et al.** (2015). *Learning both Weights and Connections for Efficient Neural Networks*. NeurIPS.
+
+15. **Frankle, J., & Carbin, M.** (2019). *The Lottery Ticket Hypothesis: Finding Sparse, Trainable Neural Networks*. ICLR.
+
+16. **Jacob, B., et al.** (2018). *Quantization and Training of Neural Networks for Efficient Integer-Arithmetic-Only Inference*. CVPR.
+
+17. **Hinton, G., Vinyals, O., & Dean, J.** (2015). *Distilling the Knowledge in a Neural Network*. NeurIPS Workshop.
+
+18. **Sanh, V., et al.** (2019). *DistilBERT, a distilled version of BERT: smaller, faster, cheaper and lighter*. NeurIPS Workshop.
+
+19. **Hu, E. J., et al.** (2021). *LoRA: Low-Rank Adaptation of Large Language Models*. ICLR 2022.
+
+20. **Dettmers, T., et al.** (2022). *LLM.int8(): 8-bit Matrix Multiplication for Transformers at Scale*. NeurIPS.
+
+---
+
+**End of Part III: Model Compression**
