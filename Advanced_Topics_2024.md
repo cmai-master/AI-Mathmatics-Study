@@ -543,7 +543,313 @@ Chinchilla: D ≈ 20N
 
 ---
 
-**To be continued**: Diffusion Models, Model Compression, and more...
+## Part II: Diffusion Models
+
+## 6. Score-Based Generative Models
+
+### 6.1 Foundation: Score Matching
+
+**Goal**: Learn the gradient of the log probability density (the "score"):
+
+$$s_\theta(x) \approx \nabla_x \log p(x)$$
+
+**Why?** Can generate samples without computing $p(x)$ explicitly!
+
+**Score matching objective** (Hyvärinen, 2005):
+$$L(\theta) = \frac{1}{2}\mathbb{E}_{p(x)}\left[\|s_\theta(x) - \nabla_x \log p(x)\|^2\right]$$
+
+**Problem**: Don't know $\nabla_x \log p(x)$ (that's what we're trying to learn!)
+
+**Solution - Denoising Score Matching**:
+
+Add noise: $\tilde{x} = x + \sigma \epsilon$ where $\epsilon \sim \mathcal{N}(0, I)$
+
+$$L_{\text{DSM}}(\theta) = \mathbb{E}_{p(x), p(\epsilon)}\left[\left\|s_\theta(\tilde{x}) - \nabla_{\tilde{x}} \log p(\tilde{x}|x)\right\|^2\right]$$
+
+Since $p(\tilde{x}|x) = \mathcal{N}(x, \sigma^2 I)$:
+$$\nabla_{\tilde{x}} \log p(\tilde{x}|x) = -\frac{\tilde{x} - x}{\sigma^2} = -\frac{\epsilon}{\sigma}$$
+
+**Final objective** (equivalent):
+$$L_{\text{DSM}}(\theta) = \mathbb{E}_{x, \epsilon}\left[\left\|s_\theta(x + \sigma\epsilon) + \frac{\epsilon}{\sigma}\right\|^2\right]$$
+
+### 6.2 Langevin Dynamics Sampling
+
+**Given** score function $s_\theta(x) \approx \nabla_x \log p(x)$, **generate** samples:
+
+$$x_{t+1} = x_t + \frac{\eta}{2} s_\theta(x_t) + \sqrt{\eta} z_t$$
+
+where $z_t \sim \mathcal{N}(0, I)$, $\eta$ is step size.
+
+**Intuition**: Gradient ascent on log probability + noise
+
+**Result**: $x_T \sim p(x)$ as $T \to \infty$, $\eta \to 0$
+
+---
+
+## 7. Denoising Diffusion Probabilistic Models (DDPM)
+
+### 7.1 Forward Process (Diffusion)
+
+**Add noise gradually** over $T$ steps:
+
+$$q(x_t | x_{t-1}) = \mathcal{N}(x_t; \sqrt{1-\beta_t} x_{t-1}, \beta_t I)$$
+
+where $\beta_1, \ldots, \beta_T$ is **variance schedule** (e.g., $\beta_t \in [0.0001, 0.02]$).
+
+**Closed form** for any $t$:
+$$q(x_t | x_0) = \mathcal{N}(x_t; \sqrt{\bar{\alpha}_t} x_0, (1-\bar{\alpha}_t)I)$$
+
+where:
+- $\alpha_t = 1 - \beta_t$
+- $\bar{\alpha}_t = \prod_{s=1}^t \alpha_s$
+
+**Reparameterization**:
+$$x_t = \sqrt{\bar{\alpha}_t} x_0 + \sqrt{1 - \bar{\alpha}_t} \epsilon, \quad \epsilon \sim \mathcal{N}(0, I)$$
+
+**Property**: As $t \to T$, $x_T \approx \mathcal{N}(0, I)$ (pure noise)
+
+### 7.2 Reverse Process (Denoising)
+
+**Goal**: Learn to reverse the diffusion
+
+$$p_\theta(x_{t-1} | x_t) = \mathcal{N}(x_{t-1}; \mu_\theta(x_t, t), \Sigma_\theta(x_t, t))$$
+
+**Key insight** (from score matching):
+
+The reverse process mean should be:
+$$\mu_\theta(x_t, t) = \frac{1}{\sqrt{\alpha_t}}\left(x_t - \frac{\beta_t}{\sqrt{1-\bar{\alpha}_t}}\epsilon_\theta(x_t, t)\right)$$
+
+where $\epsilon_\theta$ is a neural network predicting the noise.
+
+**Variance**: Often fixed to $\Sigma_\theta = \beta_t I$ or $\tilde{\beta}_t I$ where:
+$$\tilde{\beta}_t = \frac{1-\bar{\alpha}_{t-1}}{1-\bar{\alpha}_t}\beta_t$$
+
+### 7.3 Training Objective
+
+**Variational Lower Bound**:
+$$L = \mathbb{E}_q\left[-\log p_\theta(x_0|x_1) + \sum_{t=2}^T D_{KL}(q(x_{t-1}|x_t, x_0) \| p_\theta(x_{t-1}|x_t))\right]$$
+
+**Simplified** (Ho et al., 2020):
+$$L_{\text{simple}} = \mathbb{E}_{t, x_0, \epsilon}\left[\|\epsilon - \epsilon_\theta(x_t, t)\|^2\right]$$
+
+where:
+- $t \sim \text{Uniform}\{1, \ldots, T\}$
+- $x_0 \sim q(x_0)$ (real data)
+- $\epsilon \sim \mathcal{N}(0, I)$
+- $x_t = \sqrt{\bar{\alpha}_t} x_0 + \sqrt{1-\bar{\alpha}_t}\epsilon$
+
+**Algorithm** (Training):
+```python
+1. Sample x_0 from data
+2. Sample t ~ Uniform{1, ..., T}
+3. Sample ε ~ N(0, I)
+4. Compute x_t = √(ᾱ_t) x_0 + √(1-ᾱ_t) ε
+5. Compute loss: ||ε - ε_θ(x_t, t)||²
+6. Update θ via gradient descent
+```
+
+**Algorithm** (Sampling):
+```python
+1. Sample x_T ~ N(0, I)
+2. For t = T, ..., 1:
+     ε ~ N(0, I) if t > 1, else ε = 0
+     x_{t-1} = 1/√α_t (x_t - (β_t/√(1-ᾱ_t))ε_θ(x_t, t)) + √β_t ε
+3. Return x_0
+```
+
+### 7.4 Mathematical Derivations
+
+**Derivation 1: Forward process closed form**
+
+Want: $q(x_t | x_0)$
+
+By induction:
+$$\begin{aligned}
+x_t &= \sqrt{\alpha_t} x_{t-1} + \sqrt{1-\alpha_t}\epsilon_{t-1} \\
+    &= \sqrt{\alpha_t}(\sqrt{\alpha_{t-1}} x_{t-2} + \sqrt{1-\alpha_{t-1}}\epsilon_{t-2}) + \sqrt{1-\alpha_t}\epsilon_{t-1} \\
+    &= \sqrt{\alpha_t \alpha_{t-1}} x_{t-2} + \sqrt{\alpha_t(1-\alpha_{t-1})}\epsilon_{t-2} + \sqrt{1-\alpha_t}\epsilon_{t-1}
+\end{aligned}$$
+
+Using $\mathcal{N}(0, \sigma_1^2) + \mathcal{N}(0, \sigma_2^2) = \mathcal{N}(0, \sigma_1^2 + \sigma_2^2)$:
+$$x_t = \sqrt{\bar{\alpha}_t} x_0 + \sqrt{1-\bar{\alpha}_t}\epsilon$$
+
+**Derivation 2: Reverse process mean**
+
+Posterior: $q(x_{t-1} | x_t, x_0)$ is Gaussian with mean:
+$$\tilde{\mu}_t(x_t, x_0) = \frac{\sqrt{\bar{\alpha}_{t-1}}\beta_t}{1-\bar{\alpha}_t}x_0 + \frac{\sqrt{\alpha_t}(1-\bar{\alpha}_{t-1})}{1-\bar{\alpha}_t}x_t$$
+
+Substitute $x_0 = \frac{1}{\sqrt{\bar{\alpha}_t}}(x_t - \sqrt{1-\bar{\alpha}_t}\epsilon)$:
+$$\tilde{\mu}_t = \frac{1}{\sqrt{\alpha_t}}\left(x_t - \frac{\beta_t}{\sqrt{1-\bar{\alpha}_t}}\epsilon\right)$$
+
+Since we don't know $\epsilon$, we predict it: $\epsilon_\theta(x_t, t)$.
+
+### 7.5 Connection to Score-Based Models
+
+**Score function**:
+$$\nabla_{x_t} \log q(x_t) = -\frac{1}{\sqrt{1-\bar{\alpha}_t}}\epsilon$$
+
+**Predicted score**:
+$$s_\theta(x_t, t) = -\frac{1}{\sqrt{1-\bar{\alpha}_t}}\epsilon_\theta(x_t, t)$$
+
+**Therefore**:
+- Predicting noise $\epsilon$ ≡ Predicting score function
+- DDPM is a discretization of score-based SDE
+
+---
+
+## 8. Advanced Diffusion Techniques
+
+### 8.1 Variance Schedules
+
+**Linear** (original DDPM):
+$$\beta_t = \beta_1 + \frac{t-1}{T-1}(\beta_T - \beta_1)$$
+
+**Cosine** (improved, Nichol & Dhariwal, 2021):
+$$\bar{\alpha}_t = \frac{f(t)}{f(0)}, \quad f(t) = \cos\left(\frac{t/T + s}{1+s} \cdot \frac{\pi}{2}\right)^2$$
+
+**Why cosine?** Slower noise addition at start/end, more uniform SNR.
+
+### 8.2 Improved Sampling: DDIM
+
+**Problem**: DDPM requires T steps (slow!)
+
+**DDIM** (Song et al., 2020): Non-Markovian, deterministic sampling
+
+**Update rule**:
+$$x_{t-1} = \sqrt{\bar{\alpha}_{t-1}}\left(\frac{x_t - \sqrt{1-\bar{\alpha}_t}\epsilon_\theta(x_t)}{\sqrt{\bar{\alpha}_t}}\right) + \sqrt{1-\bar{\alpha}_{t-1} - \sigma_t^2}\epsilon_\theta(x_t) + \sigma_t \epsilon_t$$
+
+**Special case** $\sigma_t = 0$: **Deterministic**!
+$$x_{t-1} = \sqrt{\bar{\alpha}_{t-1}}\underbrace{\frac{x_t - \sqrt{1-\bar{\alpha}_t}\epsilon_\theta(x_t)}{\sqrt{\bar{\alpha}_t}}}_{\text{predicted } x_0} + \sqrt{1-\bar{\alpha}_{t-1}}\epsilon_\theta(x_t)$$
+
+**Benefit**: Can skip steps! Use $t \in \{1, 10, 20, \ldots, T\}$ instead of $\{1, 2, \ldots, T\}$
+- 10x-50x faster sampling
+- Slightly lower quality (acceptable trade-off)
+
+### 8.3 Guidance
+
+#### 8.3.1 Classifier Guidance
+
+**Goal**: Conditional generation $p(x|y)$
+
+**Bayes' rule**:
+$$\nabla_x \log p(x|y) = \nabla_x \log p(x) + \nabla_x \log p(y|x)$$
+
+**Guided sampling**:
+$$\tilde{\epsilon}_\theta(x_t) = \epsilon_\theta(x_t) - \sqrt{1-\bar{\alpha}_t}\nabla_{x_t} \log p(y|x_t)$$
+
+**Requires**: Pre-trained classifier $p(y|x_t)$ (noisy classifier!)
+
+#### 8.3.2 Classifier-Free Guidance (CFG)
+
+**Idea**: Train conditional and unconditional models together
+
+**Training**:
+- With probability $p$: condition on label $y$
+- With probability $1-p$: drop label (unconditional)
+
+**Single model** learns both:
+- $\epsilon_\theta(x_t, y)$ (conditional)
+- $\epsilon_\theta(x_t, \emptyset)$ (unconditional)
+
+**Guided prediction**:
+$$\tilde{\epsilon}_\theta(x_t, y) = \epsilon_\theta(x_t, \emptyset) + w \cdot (\epsilon_\theta(x_t, y) - \epsilon_\theta(x_t, \emptyset))$$
+
+where $w$ is **guidance scale** ($w=0$: unconditional, $w=1$: conditional, $w>1$: over-guided).
+
+**Intuition**:
+- Amplify the conditional signal
+- Move away from unconditional prediction
+
+**Used in**: Stable Diffusion, DALL-E 2, Imagen
+
+**Typical values**: $w \in [5, 15]$ for images
+
+---
+
+## 9. Latent Diffusion Models
+
+**Problem**: Diffusion in pixel space is expensive
+
+**Idea**: Diffusion in **latent space**
+
+### 9.1 Architecture
+
+1. **Encoder**: $E: \mathbb{R}^{H \times W \times 3} \to \mathbb{R}^{h \times w \times c}$
+   - Compress image to latent (e.g., 8x8x4 from 512x512x3)
+
+2. **Diffusion**: Operate in latent space
+   - Much smaller: $h \ll H$, $w \ll W$
+
+3. **Decoder**: $D: \mathbb{R}^{h \times w \times c} \to \mathbb{R}^{H \times W \times 3}$
+   - Reconstruct image from latent
+
+**Training**:
+1. Train autoencoder (E, D) with perceptual loss
+2. Freeze encoder/decoder
+3. Train diffusion model in latent space
+
+**Used in**: Stable Diffusion
+
+**Benefits**:
+- 3-8x faster training
+- 3-8x faster sampling
+- Same quality
+- Lower memory
+
+---
+
+## 10. Quick Reference: Diffusion Equations
+
+### DDPM Training
+```
+Loss = E_{t,x₀,ε} [||ε - ε_θ(x_t, t)||²]
+
+where:
+  x_t = √(ᾱ_t) x₀ + √(1-ᾱ_t) ε
+  t ~ Uniform{1,...,T}
+  ε ~ N(0, I)
+```
+
+### DDPM Sampling
+```
+x_T ~ N(0, I)
+for t = T to 1:
+  z ~ N(0, I) if t > 1, else 0
+  x_{t-1} = 1/√α_t (x_t - β_t/√(1-ᾱ_t) ε_θ(x_t,t)) + √β_t z
+```
+
+### DDIM Sampling (Deterministic)
+```
+x₀_pred = (x_t - √(1-ᾱ_t) ε_θ(x_t)) / √ᾱ_t
+x_{t-1} = √ᾱ_{t-1} x₀_pred + √(1-ᾱ_{t-1}) ε_θ(x_t)
+```
+
+### Classifier-Free Guidance
+```
+ε̃ = ε_θ(x_t, ∅) + w(ε_θ(x_t, y) - ε_θ(x_t, ∅))
+
+Common w: 7-15 for images
+```
+
+---
+
+## References (Continued)
+
+8. **Ho, J., Jain, A., & Abbeel, P.** (2020). *Denoising Diffusion Probabilistic Models*. NeurIPS.
+
+9. **Song, J., Meng, C., & Ermon, S.** (2020). *Denoising Diffusion Implicit Models*. ICLR 2021.
+
+10. **Dhariwal, P., & Nichol, A.** (2021). *Diffusion Models Beat GANs on Image Synthesis*. NeurIPS.
+
+11. **Ho, J., & Salimans, T.** (2022). *Classifier-Free Diffusion Guidance*. NeurIPS Workshop.
+
+12. **Rombach, R., et al.** (2022). *High-Resolution Image Synthesis with Latent Diffusion Models*. CVPR. (Stable Diffusion)
+
+13. **Song, Y., & Ermon, S.** (2019). *Generative Modeling by Estimating Gradients of the Data Distribution*. NeurIPS.
+
+---
+
+**Next**: Model Compression, Quantization (Phase 3)
 
 ---
 
